@@ -1,0 +1,1048 @@
+#!/bin/bash
+
+# RNA-seq analysis pipeline - v1.0
+
+# Author: JIN Xiaoyang (jinxiaoyang@jinxiaoyang.cn)
+# Date:   2015-09
+
+# The intention of the creation of this script is to make RNA-seq analysis
+# process more automatic.
+#
+# To run this script, the 1st step is:
+#   $0 prepare <DIR>...
+#              or
+#   $0 prepare <CONFIG_FILE>
+#
+# If the input parament is a directory, then this directory would be searched
+# for fq.gz files (i.e. compressed fastq files). We use these fq.gz files to
+# construct a config file, which will be used later. If the input parament is a
+# regular file, then this file would be interpret as config file. The format of
+# config file is something like below:
+#
+# CD5-	R1_P1	/home/zlg01/Experiment/ZhangLab/CD5_DC/212_1.fq.gz
+# CD5-	R1_P2	/home/zlg01/Experiment/ZhangLab/CD5_DC/212_2.fq.gz
+# CD5-	R2_P1	/home/zlg01/Experiment/ZhangLab/CD5_DC/205_L1_1.fq.gz
+# CD5-	R2_P2	/home/zlg01/Experiment/ZhangLab/CD5_DC/205_L1_2.fq.gz
+# CD5+	R1_P1	/home/zlg01/Experiment/ZhangLab/CD5_DC/211_1.fq.gz
+# CD5+	R1_P2	/home/zlg01/Experiment/ZhangLab/CD5_DC/211_2.fq.gz
+# CD5+	R2_P1_F1	/home/zlg01/Experiment/ZhangLab/CD5_DC/203_L3_1.fq.gz
+# CD5+	R2_P1_F2	/home/zlg01/Experiment/ZhangLab/CD5_DC/203_L4_1.fq.gz
+# CD5+	R2_P2_F1	/home/zlg01/Experiment/ZhangLab/CD5_DC/203_L3_2.fq.gz
+# CD5+	R2_P2_F2	/home/zlg01/Experiment/ZhangLab/CD5_DC/203_L4_2.fq.gz
+# 
+# The first column is sample label, the second column is fastq file attribute
+# ('R' means repeat, start from 1. 'P' means pair, could be 1 or 2 for pair-end
+# sequencing, 0 for single-end sequencing. 'F' means fragment and it's
+# used when one sample was splited into different lanes.) The third column is
+# the absolute path of fastq file.
+
+# These files should be included in the same path of this script
+# hpc.queue           - Queue information for IBP-HPC
+# RNA-seq.path.inc    - Some environment vairables used in pbs script
+# ========================= config ========================= #
+
+set -o nounset                              # Treat unset variables as an error
+
+fakebin=${0##*/}
+realbin=`readlink -m $0`
+realdir=`dirname $realbin`
+
+declare queue
+declare -i nodes
+declare -i ppn
+
+# ========================= user-config ========================= #
+
+# HPC 上的可用队列，需根据实际情况调整
+hpc_queue=$realdir/inc/hpc.queue
+path_inc=$realdir/inc/RNA-seq.path.inc
+
+# 流程使用的最小 CPU 核心数
+min_cores=48
+# 流程使用的最大 CPU 核心数
+max_cores=48
+
+# valid_queues=(
+#     IBP10
+#     IBP5A
+#     IBP5B
+#     Infini
+#     batch
+#     )
+# default_queue="IBP5A"
+# nodes=5
+# ppn=12
+
+output_path='/pfs1/zhanglg/zlg01/Output/RNA-seq'
+output_bak=$output_path/.project_bak
+project_log=$realdir/.log
+project_history=$realdir/.history
+
+debug=${DEBUG:-''}
+
+# TODO: could PHRED score auto set by analying fastq file?
+phred_score=${PHRED:-64}
+
+# ========================= function ========================= #
+
+function usage()
+{
+    exec 3>&1
+    exec 1>&2
+
+    echo "RNA-seq pipeline builder v1.0"
+    echo
+    echo "Usage: $fakebin <command> [options]"
+    echo
+    echo "Commands:"
+    echo "      -p/prepare  DIR..."
+    echo "                  CONFIG_FILE"
+    echo "      -d/delete   [JOB_NAME]"
+    echo "      -v/view     [JOB_NAME]"
+    echo "      -s/submit   [JOB_NAME]"
+    echo "      -h/help "
+
+    exec 2>&3
+}
+
+function usage_prepare()
+{
+    exec 3>&1
+    exec 1>&2
+
+    echo "Usage: $fakebin prepare <DIR>..."
+    echo "    or $fakebin prepare <CONFIG_FILE>"
+
+    exec 2>&3
+}
+
+function usage_delete()
+{
+    exec 3>&1
+    exec 1>&2
+
+    echo "Usage: $fakebin delete <JOB_NAME>"
+
+    exec 2>&3
+}
+
+function usage_view()
+{
+    exec 3>&1
+    exec 1>&2
+
+    echo "Usage: $fakebin view <JOB_NAME>"
+
+    exec 2>&3
+}
+
+# TODO: we need to do more
+# some environment checks before the running of script
+function check_env()
+{
+    if [ `whoami` != "zlg01" ]||[ "$HOSTNAME" != "ln1" ]; then
+	echo "Error: you are not the right person on the right machine!" >&2
+	exit 1
+    fi
+
+    essential_fils=($hpc_queue $path_inc)
+    for file in ${essential_fils[@]}
+    do
+	if [ ! -f "$file" ]; then
+	    echo "Error: cannot find file - $file" >&2
+	    exit 1
+	fi
+    done
+}
+
+# check if some project exists 
+function check_project()
+{
+    job_name=$1
+    job_prefix=`date +%Y%m%d`
+
+    if [ -d "$output_path/${job_prefix}_${job_name}" ]; then
+	job_path="$output_path/${job_prefix}_${job_name}"
+    elif [ -d "$output_path/${job_name}" ]; then
+	job_path="$output_path/${job_name}"
+    else
+	echo "Error: no match for job_name '$job_name'" >&2
+	return 0
+    fi
+
+    echo $job_path
+}
+
+# TODO: the process of finding perfect queue could be improved
+function find_nodes()
+{
+    local queue_inf="`cat $1 | grep -v '^#' | sed -e 's/^\s\+//g' -e 's/\s\+/\t/g'`"
+    local valid_queue_list=(`echo "$queue_inf" | cut -f 1`)
+    local min_nodes_list=(`echo "$queue_inf" | cut -f 2`)
+    local max_nodes_list=(`echo "$queue_inf" | cut -f 3`)
+    local ppn_list=(`echo "$queue_inf" | cut -f 4`)
+    queue=""
+
+    for queue_no in `seq ${#valid_queue_list[@]}`
+    do
+	queue_no=$[$queue_no-1]
+	queue_name=${valid_queue_list[$queue_no]}
+	queue_nodes_min=${min_nodes_list[$queue_no]}
+	queue_nodes_max=${max_nodes_list[$queue_no]}
+	queue_ppn=${ppn_list[$queue_no]}
+
+	free_nodes=`queue_nodes $queue_name | grep -oP '(?<=now, )[0-9]+(?= nodes)'`
+
+	if [ -z "$free_nodes" ]||[ $queue_nodes_min -gt $free_nodes ]; then
+	    continue
+	fi
+
+	if [ $[$queue_nodes_min*$queue_ppn] -gt $max_cores ]; then
+	    continue
+	fi
+
+	if [ $[$free_nodes*$queue_ppn] -ge $min_cores ]; then
+	    queue=$queue_name
+	    nodes=`echo -e "$free_nodes\n$queue_nodes_max" | sort -n | head -1`
+	    ppn=$queue_ppn
+	    break
+	fi
+    done
+
+    if [ -z "$queue" ]; then
+	queue_no=$[$RANDOM%${#valid_queue_list[@]}]
+	echo "Warning: you have to wait in [1m${valid_queue_list[$queue_no]}[0m" >&2
+	queue=${valid_queue_list[$queue_no]}
+	nodes=${max_nodes_list[$queue_no]}
+	ppn=${ppn_list[$queue_no]}
+    fi
+}
+
+function check_md5()
+{
+    if [ "`md5sum $1 | cut -d' ' -f1`" == "$2" ]; then
+	return 0
+    else
+	return 1
+    fi
+}
+
+function get_md5()
+{
+    md5sum $1 | cut -d' ' -f1
+}
+
+function check_config()
+{
+    local config_file=$1
+    local error_flag=0
+
+    if [ ! -f $config_file ];then
+	echo "Error in function 'check_config': configure file not found..." >&2
+	return 1
+    fi
+
+    local config_content=$(sed -e '/^\s*#/d' -e '/^\s*$/d' $config_file)
+
+    # sample name (with redundancy removed)
+    entry1=`echo "$config_content" | cut -f 1 | sort -u`
+    regex2=`echo "$config_content" | cut -f 2 | grep -vxP "R[0-9]_P[0-2](_F[0-9])?"`
+
+    # fastq file identifier should be unique
+    entry2=`echo "$config_content" | cut -f 1,2 | sort | uniq -d`
+
+    # fastq file path should also be unique
+    entry3=`echo "$config_content" | cut -f 3 | sort | uniq -d`
+
+    if [ `echo "$entry1" | wc -l` -eq 1 ]; then
+	echo -e "Error in function 'check-config': only one sample...'\e[31m$entry1\e[0m'" >&2
+	# echo "$entry1"
+	# error_flag=1
+	return 1
+    elif [ -n "$regex2" ]; then
+	echo -e "Error in function 'check-config': invalid identifier...'\e[31m$regex2\e[0m'" >&2
+	# echo "$regex2" | head -1 
+	return 1
+    elif [ -n "$entry2" ]; then
+	echo -e "Error in function 'check-config': duplicated entry...'\e[31m$entry2\e[0m'" >&2
+	# echo "$entry2" | head -1
+	# error_flag=1
+	return 1
+    elif [ -n "$entry3" ]; then
+	echo -e "Error in function 'check-config': duplicated entry...'\e[31m$entry3\e[0m'" >&2
+	# echo "$entry3" | head -1 
+	# error_flag=1
+	return 1
+    fi
+
+    for file in $(cut -f 3 $tempfile)
+    do
+	if [ "${file:0:1}" != "/" ]; then
+	    echo -e "Error in function 'check-config': not in absolute path - [\e[31m$file\e[0m]" >&2
+	    return 1
+	fi
+
+	if [ -z "$file" ]||[ ! -r "$file" ]; then
+	    echo -e "Error in function 'check-config': cannot read file - [\e[31m$file\e[0m]" >&2
+	    # echo "$file"
+	    # error_flag=1
+	    return 1
+	fi
+    done
+
+    # return $error_flag
+}
+
+function summary_config()
+{
+    local config_file=$1
+
+    if [ ! -f $config_file ];then
+	echo "Error in function 'summary_config': configure file not found..." >&2
+	exit 1
+    fi
+
+    local tempfile=`mktemp`
+    sed -e '/^\s*#/d' -e '/^\s*$/d' $config_file > $tempfile
+
+    local category_list=`cat $tempfile | cut -f 1 | sort -u`
+
+    echo -e "\n===== SUMMARY ====="
+    echo -e "\trep\tse\tpe"
+    for category in `echo "$category_list"`
+    do
+	rep_num=`cat $tempfile | grep -P "^\Q$category\E" | cut -f 2 | grep -o "R[0-9]*" | sort -u | wc -l`
+	se_num=`cat $tempfile | grep -P "^\Q$category\E" | cut -f 2 | grep -o "R[0-9]*P0" | sort -u | wc -l`
+	pe_num=$[$rep_num-$se_num]
+	echo -e "[1m$category[0m\t$rep_num\t$se_num\t$pe_num"
+    done
+
+    echo
+    rm $tempfile
+}
+
+function join_list()
+{
+    local prefix=$1
+    local separator=$2
+    local suffix=$3
+    shift 3
+
+    local comma_flag=0
+    for element in $@
+    do
+	if [ $comma_flag -eq 0  ];then
+	    echo -n " "
+	    comma_flag=1
+	else
+	    echo -n "$separator"
+	fi
+	echo -n "$prefix$element$suffix"
+    done
+}
+
+function join_space_list()
+{
+    local prefix=$1
+    shift
+    join_list "$prefix" ' ' '' $@
+}
+
+function join_space_list_ps()
+{
+    local prefix=$1
+    local suffix=$2
+    shift 2
+    join_list "$prefix" ' ' "$suffix" $@
+}
+
+function join_comma_list()
+{
+    local prefix=$1
+    shift
+    join_list "$prefix" ',' '' $@
+}
+
+function join_comma_list_ps()
+{
+    local prefix=$1
+    local suffix=$2
+    shift 2
+    join_list "$prefix" ',' "$suffix" $@
+}
+
+function mksubdir()
+{
+    local root_dir="$1"
+
+    if [ ! -d "$root_dir" ]; then
+	echo "Error: cannot find output directory, abort..." >&2
+	exit 1
+    else
+	for subdir in ${my_subdir[@]}
+	do
+	    mkdir $root_dir/$subdir
+	done
+    fi
+}
+
+function get_phred_score()
+{
+    local my_output_path=$1
+    local exp_rep=$1
+    local illumina_version=`cat $my_output_path/fastqc_out/$exp_rep*.html | grep -m1 -oP '(?<=Illumina )[.0-9]+'`
+    
+    if [ -n "$illumina_version" ]&&[ "$illumina_version" == "1.5" ];then
+	echo "64"
+    else
+	echo "33"
+    fi
+}
+
+function add_pbs_head()
+{
+    local my_output_path=$1
+    local exp_name=$2
+    local queue=$3
+    local nodes=$4
+    local ppn=$5
+
+    echo "#PBS -S /bin/bash"
+    echo "#PBS -V"
+    echo "#PBS -N $exp_name"
+    echo "#PBS -o $my_output_path/log/$exp_name.out"
+    echo "#PBS -e $my_output_path/log/$exp_name.err"
+    echo "#PBS -q $queue"
+    echo "#PBS -l nodes=$nodes:ppn=$ppn"
+    echo
+    cat $path_inc
+    echo
+}
+
+function gen_main_pbs()
+{
+    local my_output_path=$1
+    local exp_name=$2
+    local time_log=$3
+
+    pbs_total_nodes=$[$nodes*$ppn]
+    exp_rep_list=(`ls $my_output_path/fastq | grep -o '^.*_R[0-9]' | sort -u`)
+    parallel_fastqc=`ls $my_output_path/fastq | wc -l`
+    parallel_tophat=`ls $my_output_path/fastq | grep -o "^.*_R[0-9]" | sort -u | wc -l`
+    parallel_cufflinks=$parallel_tophat
+    parallel_cuffquant=$parallel_tophat
+
+    exec 3>&1
+    exec 1>$my_output_path/$exp_name.pbs
+
+    add_pbs_head $my_output_path $exp_name $queue $nodes $ppn
+
+    # run fastQC -1
+    echo
+    echo "date +'[%Y-%m-%d %H:%M:%S] run fastQC...' >> $timelog"
+    echo "fastqc -t $parallel_fastqc -o $my_output_path/fastqc_out $my_output_path/fastq/*.fq.gz &> $my_output_path/fastqc_out/fastqc.out"
+    echo
+
+    # # run Trimmomatic
+    # echo "date +'[%Y-%m-%d %H:%M:%S] run Trimmomatic...' >> $timelog"
+    # fqlist=(`ls $my_output_path/fastq | grep -F ".fq.gz"`)
+    # clean_fastq="$my_output_path/fastq_clean"
+    # unpair_fastq="$my_output_path/fastq_unpair"
+
+    # for pe_fq in `ls $my_output_path/fastq | grep -P "_P1(_F[0-9])?.fq.gz"`
+    # do
+	# pe_fq_pair=`echo "$pe_fq" | perl -ne 's/P1((_F[0-9])?.fq.gz)/P2$1/g; print'`
+	# pe_fq_name=`echo "$pe_fq" | perl -ne 's/_P1((_F[0-9])?).fq.gz/$1/g; print'`
+	# echo "java -jar /pfs1/zhanglg/zlg01/Software/Trimmomatic-0.33/trimmomatic-0.33.jar PE -threads $[$pbs_total_nodes*2/${#fqlist[@]}] -phred$phred_score -trimlog $my_output_path/trimmomatic_out/$pe_fq_name.trimlog $my_output_path/fastq/$pe_fq $my_output_path/fastq/$pe_fq_pair $clean_fastq/$pe_fq $unpair_fastq/$pe_fq $clean_fastq/$pe_fq_pair $unpair_fastq/$pe_fq_pair ILLUMINACLIP:/pfs1/zhanglg/zlg01/Software/Trimmomatic-0.33/adapters/TruSeq3-PE.fa:2:30:10 LEADING:3 TRAILING:3 SLIDINGWINDOW:4:15 MINLEN:36 &> $my_output_path/$pe_fq_name.out &"
+    # done
+
+    # for se_fq in `ls $my_output_path/fastq | grep -P "_P0(_F[0-9])?.fq.gz"`
+    # do
+	# se_fq_name=`echo "$pe_fq" | perl -ne 's/_P0((_F[0-9])?).fq.gz/$1/g; print'`
+	# echo "java -jar /pfs1/zhanglg/zlg01/Software/Trimmomatic-0.33/trimmomatic-0.33.jar SE -threads $[$pbs_total_nodes*2/${#fqlist[@]}] -phred$phred_score -trimlog $my_output_path/trimmomatic_out/$se_fq_name.trimlog $my_output_path/fastq/$se_fq $clean_fastq/$se_fq ILLUMINACLIP:/pfs1/zhanglg/zlg01/Software/Trimmomatic-0.33/adapters/TruSeq3-PE.fa:2:30:10 LEADING:3 TRAILING:3 SLIDINGWINDOW:4:15 MINLEN:36 &> $my_output_path/$se_fq_name.out &"
+    # done
+    # echo "wait"
+
+    # # run fastQC -2
+    # echo
+    # echo "date +'[%Y-%m-%d %H:%M:%S] run fastQC...' >> $timelog"
+    # echo "fastqc -t $parallel_fastqc -o $my_output_path/fastqc_new_out $my_output_path/fastq_clean/*.fq.gz &> $my_output_path/fastqc_new_out/fastqc.out"
+    # echo
+
+    # run Tophat
+    echo "date +'[%Y-%m-%d %H:%M:%S] run tophat...' >> $timelog"
+    for exp_rep in ${exp_rep_list[@]}
+    do
+	echo -n "tophat -p $[$pbs_total_nodes/$parallel_tophat] -o $my_output_path/tophat_out/$exp_rep"
+	if [ -z "$phred_score" ]||[ $phred_score -eq 64 ]; then
+	    echo -n " --phred64-quals"
+	fi
+	echo -n " -G \$hg19_pc_gtf \$hg19_bowtie2_idx"
+
+	# 获取同一样品同一次重复对应的 fastq 文件列表
+	exp_rep_fqlist=(`ls $my_output_path/fastq | grep -F "$exp_rep"`)
+
+	# 对于单端测序，将所有的 fastq 文件用逗号串联起来
+	if echo "${exp_rep_fqlist[@]}" | grep -qP "_P0(_F[0-9])?.fq.gz"; then
+	    join_comma_list $my_output_path/fastq/ ${exp_rep_fqlist[@]}
+	else
+	    # 处理 pair-end 测序的情况
+	    exp_rep_fqlist_1=(`ls $my_output_path/fastq | grep -F "${exp_rep}_P1"`)
+	    exp_rep_fqlist_2=(`ls $my_output_path/fastq | grep -F "${exp_rep}_P2"`)
+
+	    join_comma_list $my_output_path/fastq/ ${exp_rep_fqlist_1[@]}
+	    join_comma_list $my_output_path/fastq/ ${exp_rep_fqlist_2[@]}
+	fi
+	echo " &> $my_output_path/tophat_out/$exp_rep.out &"
+    done
+    echo
+    echo "wait"
+
+    echo
+    # run htseq-count
+    echo "date +'[%Y-%m-%d %H:%M:%S] run htseq-count...' >> $timelog"
+    for exp_rep in ${exp_rep_list[@]}
+    do
+	echo "htseq-count -s no -f bam $my_output_path/tophat_out/$exp_rep/accepted_hits.bam \$hg19_pc_gtf > $my_output_path/htseq-count_out/$exp_rep.count 2> $my_output_path/htseq-count_out/$exp_rep.stderr &"
+    done
+    echo
+    echo "wait"
+    echo
+    echo -e "\t${exp_rep_list[@]}" | tr ' ' '\t' > $my_output_path/htseq-count_out/raw-count.txt
+    echo "paste`join_space_list_ps $my_output_path/htseq-count_out/ .count ${exp_rep_list[@]}` | cut -f 1,`seq -s, 2 2 $[${#exp_rep_list[@]}*2]` | tail -n+2 >> $my_output_path/htseq-count_out/raw-count.txt"
+    echo
+
+    echo
+    # run Cufflinks
+    echo "date +'[%Y-%m-%d %H:%M:%S] run cufflinks...' >> $timelog"
+    for exp_rep in ${exp_rep_list[@]}
+    do
+	echo "cufflinks --no-update-check -p $[$pbs_total_nodes/$parallel_cufflinks] -o $my_output_path/cufflinks_out/$exp_rep -G \$hg19_pc_gtf $my_output_path/tophat_out/$exp_rep/accepted_hits.bam &> $my_output_path/cufflinks_out/$exp_rep.out &"
+    done
+    echo
+    echo "wait"
+
+    echo
+    # run cuffmerge
+    echo "date +'[%Y-%m-%d %H:%M:%S] run cuffmerge...' >> $timelog"
+    echo "find $my_output_path/cufflinks_out -name transcripts.gtf > $my_output_path/cufflinks_out/assemblies.txt"
+    echo "cuffmerge -p $pbs_total_nodes -o $my_output_path/cuffmerge_out -g \$hg19_pc_gtf -s \$hg19_fa $my_output_path/cufflinks_out/assemblies.txt &> $my_output_path/cuffmerge_out/cuffmerge.out"
+
+    echo
+    # run cuffquant
+    echo "date +'[%Y-%m-%d %H:%M:%S] run cuffquant...' >> $timelog"
+    for exp_rep in ${exp_rep_list[@]}
+    do
+	echo "cuffquant --no-update-check -p $[$pbs_total_nodes/$parallel_cuffquant] -o $my_output_path/cuffquant_out/$exp_rep $my_output_path/cuffmerge_out/merged.gtf $my_output_path/tophat_out/$exp_rep/accepted_hits.bam &> $my_output_path/cuffquant_out/$exp_rep.out &"
+    done
+    echo
+    echo "wait"
+
+    echo 
+    # run cuffnorm
+    echo "date +'[%Y-%m-%d %H:%M:%S] run cuffnorm...' >> $timelog"
+    echo -n "cuffnorm --no-update-check -p $pbs_total_nodes -o $my_output_path/cuffnorm_out"
+    echo -n " -L"
+    join_comma_list "" ${config_lab_uniq[@]}
+    echo -n " $my_output_path/cuffmerge_out/merged.gtf"
+
+    for sample in ${config_lab_uniq[@]}
+    do
+	sample_rep_list=(`ls $my_output_path/fastq | grep -oP "^\Q${sample}\E_R[0-9]" | sort -u`)
+	join_comma_list_ps $my_output_path/cuffquant_out/ /abundances.cxb ${sample_rep_list[@]}
+    done
+    echo " &> $my_output_path/cuffnorm_out/cuffnorm.out"
+
+    echo 
+    # run cuffdiff
+    echo "date +'[%Y-%m-%d %H:%M:%S] run cuffdiff...' >> $timelog"
+    echo -n "cuffdiff --no-update-check -p $pbs_total_nodes -o $my_output_path/cuffdiff_out -b \$hg19_fa -u"
+    echo -n " -L"
+    join_comma_list "" ${config_lab_uniq[@]}
+    echo -n " $my_output_path/cuffmerge_out/merged.gtf"
+
+    for sample in ${config_lab_uniq[@]}
+    do
+	sample_rep_list=(`ls $my_output_path/fastq | grep -oP "^\Q${sample}\E_R[0-9]" | sort -u`)
+	join_comma_list_ps $my_output_path/cuffquant_out/ /abundances.cxb ${sample_rep_list[@]}
+    done
+    echo " &> $my_output_path/cuffdiff_out/cuffdiff.out"
+
+    echo
+    echo "date +'[%Y-%m-%d %H:%M:%S] finished...' >> $timelog"
+    echo
+    echo "# vim: set filetype=sh:"
+    exec 1>&3
+}
+
+function gen_sub_pbs()
+{
+    local my_output_path=$1
+    local exp_name=$2
+    local timelog=$my_output_path/log/${exp_name}.merge.time
+
+    exp_rep_list=(`ls $my_output_path/fastq | grep -o '^.*_R[0-9]' | sort -u`)
+    queue="batch"
+    nodes=1
+    ppn=12
+
+    local mergepbs=$my_output_path/pbs_script/${exp_name}.merge.pbs
+    touch $mergepbs
+    chmod +x $mergepbs
+
+    exec 3>&1
+    exec 1>$mergepbs
+
+    add_pbs_head $my_output_path ${exp_name}.merge batch 1 12
+
+    # merge htseq-count output
+    echo -e "\t${exp_rep_list[@]}" | tr ' ' '\t' > $my_output_path/htseq-count_out/raw-count.txt
+    echo "paste`join_space_list_ps $my_output_path/htseq-count_out/ .count ${exp_rep_list[@]}` | cut -f 1,`seq -s, 2 2 $[${#exp_rep_list[@]}*2]` | tail -n+2 >> $my_output_path/htseq-count_out/raw-count.txt"
+
+    echo
+    # run cuffmerge
+    echo "date +'[%Y-%m-%d %H:%M:%S] run cuffmerge...' >> $timelog"
+    echo "find $my_output_path/cufflinks_out -name transcripts.gtf > $my_output_path/cufflinks_out/assemblies.txt"
+    echo "cuffmerge -p 12 -o $my_output_path/cuffmerge_out -g \$hg19_pc_gtf -s \$hg19_fa $my_output_path/cufflinks_out/assemblies.txt &> $my_output_path/cuffmerge_out/cuffmerge.out"
+
+    echo
+    # run cuffquant
+    echo "date +'[%Y-%m-%d %H:%M:%S] run cuffquant...' >> $timelog"
+    for exp_rep in ${exp_rep_list[@]}
+    do
+	echo "cuffquant --no-update-check -p 12 -o $my_output_path/cuffquant_out/$exp_rep $my_output_path/cuffmerge_out/merged.gtf $my_output_path/tophat_out/$exp_rep/accepted_hits.bam &> $my_output_path/cuffquant_out/$exp_rep.out"
+    done
+
+    echo 
+    # run cuffnorm
+    echo "date +'[%Y-%m-%d %H:%M:%S] run cuffnorm...' >> $timelog"
+    echo -n "cuffnorm --no-update-check -p 12 -o $my_output_path/cuffnorm_out"
+    echo -n " -L"
+    join_comma_list "" ${config_lab_uniq[@]}
+    echo -n " $my_output_path/cuffmerge_out/merged.gtf"
+
+    for sample in ${config_lab_uniq[@]}
+    do
+	sample_rep_list=(`ls $my_output_path/fastq | grep -oP "^\Q${sample}\E_R[0-9]" | sort -u`)
+	join_comma_list_ps $my_output_path/cuffquant_out/ /abundances.cxb ${sample_rep_list[@]}
+    done
+    echo " &> $my_output_path/cuffnorm_out/cuffnorm.out"
+
+    echo 
+    # run cuffdiff
+    echo "date +'[%Y-%m-%d %H:%M:%S] run cuffdiff...' >> $timelog"
+    echo -n "cuffdiff --no-update-check -p 12 -o $my_output_path/cuffdiff_out -b \$hg19_fa -u"
+    echo -n " -L"
+    join_comma_list "" ${config_lab_uniq[@]}
+    echo -n " $my_output_path/cuffmerge_out/merged.gtf"
+
+    for sample in ${config_lab_uniq[@]}
+    do
+	sample_rep_list=(`ls $my_output_path/fastq | grep -oP "^\Q${sample}\E_R[0-9]" | sort -u`)
+	join_comma_list_ps $my_output_path/cuffquant_out/ /abundances.cxb ${sample_rep_list[@]}
+    done
+    echo " &> $my_output_path/cuffdiff_out/cuffdiff.out"
+
+    echo
+    echo "date +'[%Y-%m-%d %H:%M:%S] finished...' >> $timelog"
+    echo
+    echo "# vim: set filetype=sh:"
+
+    exec 1>&3
+
+    for exp_rep in ${exp_rep_list[@]}
+    do
+	local exp_rep_fqlist=(`ls $my_output_path/fastq | grep -F "$exp_rep"`)
+	local subtimelog=$my_output_path/log/$exp_rep.time
+	local subpbs=$my_output_path/pbs_script/$exp_rep.pbs
+
+	touch $subpbs
+	chmod +x $subpbs
+
+	exec 3>&1
+	exec 1>$subpbs
+
+	add_pbs_head $my_output_path $exp_rep batch 1 12
+
+	# run fastqc -1
+	echo
+	echo "date +'[%Y-%m-%d %H:%M:%S] run fastQC...' >> $subtimelog"
+	echo "fastqc -t ${#exp_rep_fqlist[@]} -o $my_output_path/fastqc_out $my_output_path/fastq/$exp_rep*.fq.gz &> $my_output_path/fastqc_out/$exp_rep.out"
+
+	# # run trimmomatic
+	# echo
+	# echo "date +'[%Y-%m-%d %H:%M:%S] run Trimmomatic...' >> $subtimelog"
+	# clean_fastq="$my_output_path/fastq_clean"
+	# unpair_fastq="$my_output_path/fastq_unpair"
+
+	# for pe_fq in `ls $my_output_path/fastq | grep -P "\Q$exp_rep\E_P1"`
+	# do
+	#     pe_fq_pair=`echo "$pe_fq" | perl -ne 's/P1((_F[0-9])?.fq.gz)/P2$1/g; print'`
+	#     pe_fq_name=`echo "$pe_fq" | perl -ne 's/_P1((_F[0-9])?).fq.gz/$1/g; print'`
+	#     echo "java -jar /pfs1/zhanglg/zlg01/Software/Trimmomatic-0.33/trimmomatic-0.33.jar PE -threads 12 -phred$phred_score -trimlog $my_output_path/trimmomatic_out/$pe_fq_name.trimlog $my_output_path/fastq/$pe_fq $my_output_path/fastq/$pe_fq_pair $clean_fastq/$pe_fq $unpair_fastq/$pe_fq $clean_fastq/$pe_fq_pair $unpair_fastq/$pe_fq_pair ILLUMINACLIP:/pfs1/zhanglg/zlg01/Software/Trimmomatic-0.33/adapters/TruSeq3-PE.fa:2:30:10 LEADING:3 TRAILING:3 SLIDINGWINDOW:4:15 MINLEN:36 &> $my_output_path/trimmomatic_out/$pe_fq_name.out"
+	# done
+	
+	# for se_fq in `ls $my_output_path/fastq | grep -P "\Q$exp_rep\E_P0"`
+	# do
+	#     se_fq_name=`echo "$pe_fq" | perl -ne 's/_P0((_F[0-9])?).fq.gz/$1/g; print'`
+	#     echo "java -jar /pfs1/zhanglg/zlg01/Software/Trimmomatic-0.33/trimmomatic-0.33.jar PE -threads 12 -phred$phred_score -trimlog $my_output_path/trimmomatic_out/$pe_fq_name.trimlog $my_output_path/fastq/$pe_fq $my_output_path/fastq/$pe_fq_pair $clean_fastq/$pe_fq $unpair_fastq/$pe_fq $clean_fastq/$pe_fq_pair $unpair_fastq/$pe_fq_pair ILLUMINACLIP:/pfs1/zhanglg/zlg01/Software/Trimmomatic-0.33/adapters/TruSeq3-PE.fa:2:30:10 LEADING:3 TRAILING:3 SLIDINGWINDOW:4:15 MINLEN:36 &> $my_output_path/trimmomatic_out/$pe_fq_name.out"
+	# done
+
+	# # run fastqc -2
+	# echo
+	# echo "date +'[%Y-%m-%d %H:%M:%S] run fastQC...' >> $subtimelog"
+	# echo "fastqc -t ${#exp_rep_fqlist[@]} -o $my_output_path/fastqc_new_out $my_output_path/fastq_clean/$exp_rep*.fq.gz &> $my_output_path/fastqc_new_out/$exp_rep.out"
+
+	# run tophat
+	echo
+	echo "date +'[%Y-%m-%d %H:%M:%S] run tophat...' >> $subtimelog"
+	echo -n "tophat -p 12 -o $my_output_path/tophat_out/$exp_rep"
+	if [ -z "$phred_score" ]||[ $phred_score -eq 64 ]; then
+	    echo -n " --phred64-quals"
+	fi
+	echo -n " -G \$hg19_pc_gtf \$hg19_bowtie2_idx"
+
+	# 对于单端测序，将所有的 fastq 文件用逗号串联起来
+	if echo "${exp_rep_fqlist[@]}" | grep -qP "_P0(_F[0-9])?.fq.gz"; then
+	    join_comma_list $my_output_path/fastq/ ${exp_rep_fqlist[@]}
+	else
+	    # 处理 pair-end 测序的情况
+	    exp_rep_fqlist_1=(`ls $my_output_path/fastq | grep -F "${exp_rep}_P1"`)
+	    exp_rep_fqlist_2=(`ls $my_output_path/fastq | grep -F "${exp_rep}_P2"`)
+
+	    join_comma_list $my_output_path/fastq/ ${exp_rep_fqlist_1[@]}
+	    join_comma_list $my_output_path/fastq/ ${exp_rep_fqlist_2[@]}
+	fi
+	echo " &> $my_output_path/tophat_out/$exp_rep.out"
+
+	# run htseq-count
+	echo
+	echo "date +'[%Y-%m-%d %H:%M:%S] run htseq-count...' >> $subtimelog"
+	echo "htseq-count -s no -f bam $my_output_path/tophat_out/$exp_rep/accepted_hits.bam \$hg19_pc_gtf > $my_output_path/htseq-count_out/$exp_rep.count 2> $my_output_path/htseq-count_out/$exp_rep.stderr"
+
+	# run cufflinks
+	echo
+	echo "date +'[%Y-%m-%d %H:%M:%S] run cufflinks...' >> $subtimelog"
+	echo "cufflinks --no-update-check -p 12 -o $my_output_path/cufflinks_out/$exp_rep -G \$hg19_pc_gtf $my_output_path/tophat_out/$exp_rep/accepted_hits.bam &> $my_output_path/cufflinks_out/$exp_rep.out"
+
+	echo
+	echo "date +'[%Y-%m-%d %H:%M:%S] finished...' >> $subtimelog"
+	echo
+	echo "# vim: set filetype=sh:"
+	exec 1>&3
+    done
+
+}
+
+# ========================= main ========================= #
+
+my_subdir=(
+    fastq
+    pbs_script
+    log
+    fastqc_out
+    trimmomatic_out
+    fastqc_new_out
+    tophat_out
+    htseq-count_out
+    cufflinks_out
+    cuffmerge_out
+    cuffquant_out
+    cuffnorm_out
+    cuffdiff_out
+    )
+    # fastq_clean
+    # fastq_unpair
+
+if [ "$#" -eq "0" ]; then
+	usage
+	exit 1
+fi
+
+check_env
+
+if [ "$1" == "prepare" ]||[ "$1" == "-p" ]||[ "$1" == "p" ]; then
+
+    tempfile=`mktemp`
+    shift
+
+    if [ "$#" -eq "0" ]; then
+	usage_prepare
+	exit 1
+    fi
+
+    # 如果 prepare 后面跟的第一个参数是文件，则把该文件当成配置文件
+    # （由于后续的编辑针对临时文件，源文件不会受到破坏）
+    # 否则 prepare 后面的参数被视为目录，根据目录构造配置文件
+    if [ -n "$1" ]&&[ -f "$1" ]; then
+	cp "$1" $tempfile
+    else
+	exec 3>&1
+	exec 1>$tempfile
+
+	echo "# Category	Identifier	Path"
+
+	for dir in "$@"
+	do
+	    [ ! -d $dir ]&&continue
+
+	    truepath=`readlink -m $dir`
+	    find $truepath -name '*.fq.gz' | sort
+	    echo
+	done
+
+	echo 
+	echo "# 请为您的变更输入提交说明。以 '#' 开始的行将被忽略，而一个空的提交"
+	echo "# 说明将会终止提交。"
+	echo "#"
+	echo "# Category: 样品所属类别，不能包含空格，如 CD5+ / CD5-"
+	echo "# Identifier: fastq gzip 文件标识符，命名规则"
+	echo "#     R[0-9]_P[0-2](_F[0-9])?"
+	echo "#     R - 重复次数编号，从1开始"
+	echo "#     P - pair-end 测序中的 pair 编号，单端测序其值为0"
+	echo "#     F - 对应同一次测序的 fastq 文件编号，可选"
+	echo "# Path: fastq gzip 文件所在路径，用绝对路径表示，不能包含空格"
+	echo "#"
+	echo "# 日期：  `date +'%Y-%m-%d %H:%M:%S'`"
+	echo "#"
+	echo "# vim:set commentstring=#\ %s:"
+	echo "# vim:set filetype=conf:"
+
+	exec 1>&3
+
+	sed -i '/^[^#]/s/^/C0\tR0_P0\t/g' $tempfile
+	vim $tempfile
+    fi
+
+
+    ## 调用 vim 修改生成的配置文件
+    ## 使用 MD5 checksum 检查文件是否被编辑
+    # md5_old=$(get_md5 $tempfile)
+    # vim $tempfile
+
+    ## 当 config 文件没有被修改时，程序退出
+    # if check_md5 $tempfile $md5_old; then
+	# echo "Abort configuring..."
+	# rm $tempfile
+	# exit 1
+    # else
+	# while true
+	# do
+	    # 查找可能有问题的记录，用于在 vim 窗口中高亮显示
+	    check_config $tempfile
+	    if [ $? -eq 1 ]; then
+		rm $tempfile
+		exit 1
+	    fi
+	    # [ -z $hlstring ] && break
+
+	    # md5_old=$(get_md5 $tempfile)
+	    # vim "+/\V$hlstring" $tempfile
+
+	    # if check_md5 $tempfile $md5_old; then
+		# echo "Abort configuring..."
+		# rm $tempfile
+		# exit 1
+	    # fi
+	# done
+    # fi
+
+    summary_config $tempfile
+
+    # 提示是否继续，默认继续
+    read -p "Enter the experiment name, leave blank to quit:  " exp_name
+    if [ -z "$exp_name" ]; then
+	exit 1
+    else
+	# echo "Here we go!"
+
+	config_lab=(`cut -f 1 $tempfile`)
+	config_lab_uniq=(`cut -f 1 $tempfile | sort -u`)
+	config_id=(`cut -f 2 $tempfile`)
+	config_path=(`cut -f 3 $tempfile`)
+
+	exp_name=${exp_name%%/*}
+	exp_name=${exp_name// /_}
+	# 为了安全起见（避免跳到上层文件夹），实验名中不能包含'..'
+	exp_name=${exp_name//../-}
+
+	my_output_path="$output_path/`date +%Y%m%d`_$exp_name"
+
+	# TODO: programe shouldn't quit, fix it later
+	if [ -d "$my_output_path" ]&&[ -s "$my_output_path" ];then
+	    echo "Error: directory name conflict, abort..." >&2
+	    exit 1
+	fi
+	echo "Save output to: $my_output_path"
+
+	# 所有的文件都将在此文件夹下生成，不会影响到其它文件夹
+	mkdir -p "$my_output_path"
+	# 如果目标文件夹没有创建成功，后续工作就没有意义
+	if [ ! -d "$my_output_path" ]; then
+	    echo "Error: cannot create output directory, abort..." >&2
+	    exit 1
+	fi
+
+	# 由于一些日志文件会被放在对应的子文件夹中，需要先生成子文件夹
+	mksubdir "$my_output_path"
+
+	mv $tempfile "$my_output_path/log/$exp_name.config"
+	timelog="$my_output_path/log/$exp_name.time"
+
+
+
+	# TODO: the file suffix need more consideration, may not 'fq.gz' at all!
+	# 以软链接的形式填充 fastq 文件夹并规范命名。
+	for file_no in `seq ${#config_path[@]}`
+	do
+	    file_no=$[$file_no-1]
+	    ln -s ${config_path[$file_no]} $my_output_path/fastq/${config_lab[$file_no]}_${config_id[$file_no]}.fq.gz
+	done
+
+	# 生成 PBS 脚本，为了记录尽可能多得信息，qsub 相关参数均体现在脚本的文件头中
+	touch $my_output_path/$exp_name.pbs
+	chmod +x $my_output_path/$exp_name.pbs
+
+	# find valid queue automatically
+	find_nodes $hpc_queue
+
+	date +'[%Y-%m-%d %H:%M:%S] create PBS script...' > $timelog
+
+	gen_main_pbs $my_output_path $exp_name $timelog
+	gen_sub_pbs $my_output_path $exp_name
+    fi
+
+    date +"[%Y-%m-%d %H:%M:%S] prepare %Y%m%d_$exp_name" >> $project_log
+    date +"%Y%m%d_$exp_name" >> $project_history
+    exit
+
+# 删除某个项目文件夹
+elif [ "$1" == "delete" ]||[ "$1" == "-d" ]||[ "$1" == "d" ]; then
+    shift
+
+    if [ "$#" -eq "0" ]; then
+	name_tmp=`tail -1 $project_history`
+	if [ -z "$name_tmp" ]; then
+	    usage_delete
+	    exit 1
+	fi
+    else
+	name_tmp=$1
+    fi
+
+    job_path=`check_project $name_tmp`
+    [ ! -d "$job_path" ]&&exit 1
+
+    job_name=${job_path##*/}
+    
+    du -sh "$job_path"
+    echo -ne "\033[1;31mAre you sure you want to delete it?\033[0m [Y/n] "
+    read job_delete_flag
+
+    if [ -n "$job_delete_flag" ]; then
+	if [ "$job_delete_flag" == "Y" ]||[ "$job_delete_flag" == "y" ]; then
+	    rm -rf $output_bak
+	    mv $job_path $output_bak
+	    echo "Done! project moved to $output_bak"
+
+	    date +"[%Y-%m-%d %H:%M:%S] delete  $job_name" >> $project_log
+	    sed -i -e "/^$job_name$/d" $project_history
+	else
+	    echo "Abort..." >&2
+	fi
+    else
+	echo "Abort..." >&2
+    fi
+    exit
+
+# 查看某个项目文件夹中的 pbs 脚本
+elif [ "$1" == "view" ]||[ "$1" == "-v" ]||[ "$1" == "v" ]; then
+    shift
+
+    if [ "$#" -eq "0" ]; then
+	name_tmp=`tail -1 $project_history`
+	if [ -z "$name_tmp" ]; then
+	    usage_view
+	    exit 1
+	fi
+    else
+	name_tmp=$1
+    fi
+
+    job_path=`check_project $name_tmp`
+    [ ! -d "$job_path" ]&&exit 1
+
+    job_name=${job_path##*/}
+    job_pbs=$job_path/${job_name#*_}.pbs
+    
+    md5_old=`get_md5 $job_pbs`
+    vim $job_pbs
+
+    if ! check_md5 $job_pbs $md5_old; then
+	date +"[%Y-%m-%d %H:%M:%S] edit    $job_name" >> $project_log
+    fi
+    exit
+
+elif [ "$1" == "submit" ]||[ "$1" == "-s" ]||[ "$1" == "s" ]; then
+    shift
+
+    if [ "$#" -eq "0" ]; then
+	name_tmp=`tail -1 $project_history`
+	if [ -z "$name_tmp" ]; then
+	    usage_delete
+	    exit 1
+	fi
+    else
+	name_tmp=$1
+    fi
+
+    job_path=`check_project $name_tmp`
+    [ ! -d "$job_path" ]&&exit 1
+
+    job_name=${job_path##*/}
+    job_pbs=$job_path/${job_name#*_}.pbs
+
+    echo -ne "\033[1;32mSubmit the job - '$job_name' ?\033[0m [Y/n] "
+    read job_submit_flag
+
+    if [ -n "$job_submit_flag" ]; then
+	if [ "$job_submit_flag" == "Y" ]||[ "$job_submit_flag" == "y" ]; then
+	    qsub -q $job_pbs
+	    echo "Done! Job submitted!"
+	else
+	    echo "Abort..." >&2
+	fi
+    else
+	echo "Abort..." >&2
+    fi
+
+    date +"[%Y-%m-%d %H:%M:%S] submit  $job_name" >> $project_log
+    exit
+
+elif [ "$1" == "clean" ]||[ "$1" == "-c" ]||[ "$1" == "c" ]; then
+    shift
+
+    declare -i clean_count=0
+    for job_name in `cat $project_history`
+    do
+	if [ ! -d $output_path/$job_name ]; then
+	    sed -i -e "/^$job_name$/d" $project_history
+	    clean_count=$[$clean_count+1]
+	fi
+    done
+
+    echo "Delete $clean_count ghost project(s) in history"
+    exit
+
+elif [ "$1" == "--help" ]||[ "$1" == "-h" ]||[ "$1" == "help" ]; then
+    usage
+    exit
+
+else
+    echo "Error: unrecognized parament - $1" >&2
+    exit 1
+fi
+
+exit
+
+# vim:set filetype=sh:

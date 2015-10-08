@@ -1,0 +1,7 @@
+hg19_base="/pfs1/zhanglg/zlg01/Database/iGenomes/Homo_sapiens/UCSC/hg19"
+hg19_gtf="$hg19_base/Annotation/Genes/genes.gtf"
+hg19_pc_gtf="/pfs1/zhanglg/zlg01/Database/GENCODE/GRCh37_v19/gencode.v19.annotation.protein_coding.gtf"
+hg19_bowtie_idx="$hg19_base/Sequence/BowtieIndex/genome"
+hg19_bowtie2_idx="$hg19_base/Sequence/Bowtie2Index/genome"
+hg19_hisat_idx="/pfs1/zhanglg/zlg01/Database/hisat_index/hg19_hisat"
+hg19_fa="$hg19_base/Sequence/Bowtie2Index/genome.fa"
