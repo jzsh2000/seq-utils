@@ -1,6 +1,7 @@
 #! /bin/bash
 
-# 2015-09-29
+# Author: JIN Xiaoyang
+# Date  : 2015-09-29
 # guess phred-score of fastq files
 
 if [ $# -eq 0 ]; then

@@ -1,6 +1,7 @@
 #!/bin/bash
 
-# 2015-09-25
+# Author: JIN Xiaoyang
+# Date  : 2015-09-25
 # 根据 fastqc 输出的 html 文件判断 fastq 文件版本（phred-score）
 
 if [ $# -eq 0 ]; then

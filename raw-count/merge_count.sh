@@ -1,5 +1,7 @@
 #!/bin/bash
 
+# Author: JIN Xiaoyang
+# Date  : 2015-09-29
 # merge the output files of htseq-count (with suffix *.count)
 
 file_list=($@)

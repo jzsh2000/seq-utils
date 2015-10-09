@@ -1,6 +1,7 @@
 #!/bin/bash
 
-# 2015-10-01
+# Author: JIN Xiaoyang
+# Date  : 2015-10-01
 # 检查作为参数的 fq.gz 文件并给出简单统计信息
 # 若输出结果中以红字显示 ERROR，说明 gzip 压缩文件出错
 
