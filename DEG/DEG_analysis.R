@@ -28,7 +28,7 @@ for (arg in args) {
 	cuffdiff.dir=arg
     }
     # get HTSeq-count directory
-    if(file.exists(file.path(arg, "raw-count.txt"))) {
+    if(length(Sys.glob(file.path(arg, "*.count")))>0) {
 	htseq.dir=arg
     }
 }
@@ -101,13 +101,36 @@ if (exists("cuffnorm.dir") && exists("cuffdiff.dir")) {
 }
 
 if (exists("htseq.dir")) {
-    readcount.raw <- read.delim(file.path(htseq.dir, "raw-count.txt"), row.names=1, stringsAsFactors=FALSE)
-    readcount.raw <- readcount.raw[1:(nrow(readcount.raw)-5),]
 
+    library(stringr, quietly=TRUE, warn.conflicts=FALSE)
     library(ggplot2, quietly=TRUE, warn.conflicts=FALSE)
     library(edgeR, quietly=TRUE, warn.conflicts=FALSE)
 
-    # tail(readcount.raw)
+    # if `raw-count.txt` exists, read it directly; else read all the count
+    # files in R and merge them
+    if(file.exists(file.path(htseq.dir, "raw-count.txt"))) {
+	readcount.raw <- read.delim(file.path(htseq.dir, "raw-count.txt"), row.names=1, stringsAsFactors=FALSE, check.names=FALSE)
+    } else {
+	for (countfile in list.files(htseq.dir, pattern = '*.count$')) {
+	    count.raw <- read.delim(file.path(htseq.dir, countfile), row.names=1, stringsAsFactors=FALSE, check.names=FALSE)
+	    names(count.raw) = str_extract(countfile, regex(".*(?=\\.count)"))
+	    if(!exists("readcount.raw")) {
+		readcount.raw=count.raw
+	    } else {
+		readcount.raw=cbind(readcount.raw, count.raw)
+	    }
+	}
+	rm(count.raw)
+    }
+
+    # The last five lines should be trimmed
+    ## __no_feature          
+    ## __ambiguous           
+    ## __too_low_aQual       
+    ## __not_aligned         
+    ## __alignment_not_unique
+    readcount.raw <- readcount.raw[1:(nrow(readcount.raw)-5),]
+
     readcount.sum=colSums(readcount.raw)
     readcount.data <- data.frame(name=names(readcount.sum), reads=unname(readcount.sum), sample=str_extract(names(readcount.sum), regex(".*(?=_)")), rep=str_extract(names(readcount.sum), regex("[^_]*$")))
     print(readcount.data)
@@ -163,11 +186,11 @@ if (exists("htseq.dir")) {
 	    if(sam1==sam2) {
 		next
 	    }
-	    # edgeR.contrast <- rep(0, length(sample.name))
-	    # edgeR.contrast[match(sam1, sample.name)]=-1
-	    # edgeR.contrast[match(sam2, sample.name)]=1
-	    # print(edgeR.contrast)
-	    edgeR.contrast=makeContrasts(paste("edgeR.group",sam2,"-","edgeR.group",sam1, sep=""), levels=edgeR.design)
+	    edgeR.contrast <- rep(0, length(sample.name))
+	    edgeR.contrast[match(sam1, sample.name)]=-1
+	    edgeR.contrast[match(sam2, sample.name)]=1
+	    ## if `sam1` or `sam2` contains syntactically invalid names, the line below would fail
+	    # edgeR.contrast=makeContrasts(paste("edgeR.group",sam2,"-","edgeR.group",sam1, sep=""), levels=edgeR.design)
 
 	    edgeR.lrt <- glmLRT(edgeR.fit, contrast=edgeR.contrast)
 	    edgeR.tt <- topTags(edgeR.lrt, n=nrow(readcount.raw))
