@@ -13,6 +13,8 @@ transcripts= {}
 for feature in gff_file:
    if feature.type == "exon":
       transcript_id = feature.attr['gene_name']
+      if transcript_id == '':
+         continue
       if transcript_id not in transcripts:
          transcripts[transcript_id] = list()
       transcripts[transcript_id].append(feature)
