@@ -9,9 +9,8 @@ for fq_file in $@
 do
     [ ! -f $fq_file ]&&continue
 
-    md5sum=$(md5sum $fq_file | grep -oP '^[^\s]*')
     filesize=$(du -sh $fq_file | grep -oP '^[^\s]*')
-    if file $fq_file | grep -q "gzip compressed data"; then
+    if file $fq_file | grep -qiP '\bgzip\b'; then
 	filetype="gzip"
 	if gzip -t $fq_file 2>/dev/null; then
 	    filestat="OK"
@@ -23,5 +22,5 @@ do
 	filestat="OK"
     fi
 
-    echo -e "$fq_file\t$filetype\t$filesize\t$filestat\t$md5sum"
+    echo -e "$fq_file\t$filetype\t$filesize\t$filestat"
 done
