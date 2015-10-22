@@ -1,7 +1,7 @@
 #!/usr/bin/env Rscript
 
 # Date  : 2015-10-22
-# 汇总 fastqc 的输出报告
+# 汇总 fastqc 的输出报告 (文件名为 summary.txt)
 args=commandArgs(trailingOnly = TRUE)
 
 if (length(args)==0) {
