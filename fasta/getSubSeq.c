@@ -21,7 +21,7 @@
 
 #define MAXLEN 255
 #define MAX_LINE_LEN 1024
-/* #define DEBUG */
+#define DEBUG
 
 typedef struct faidx{
     unsigned int total_len;
@@ -42,11 +42,7 @@ faidx read_fa_idx(FILE *fp, const char* chr)
     char tmp_line[MAX_LINE_LEN];
     char tmp_chr[MAXLEN];
 
-    faidx idx;
-    idx.total_len=0;
-    idx.start_pos=0;
-    idx.valid_char_per_line=0;
-    idx.char_per_line=0;
+    faidx idx={0, 0, 0, 0};
 
     /* add a <tab> so as to distinct `xx` from `xxx` */
     sprintf(tmp_chr, "%s\t", chr);
@@ -77,6 +73,12 @@ unsigned get_line_length(const char* str)
 /* the main function to read fasta file */
 int read_seq(FILE *fp, faidx idx, unsigned pos1, unsigned pos2)
 {
+#ifdef DEBUG
+    printf("faidx.total_len=%u\n", idx.total_len);
+    printf("faidx.start_pos=%u\n", idx.start_pos);
+    printf("faidx.valid_char_per_line=%u\n", idx.valid_char_per_line);
+    printf("faidx.char_per_line=%u\n", idx.char_per_line);
+#endif
     char tmp_line[MAX_LINE_LEN];
     unsigned output_len=0;
     unsigned max_inc=idx.valid_char_per_line;
@@ -220,6 +222,12 @@ int main(int argc, char * argv[])
     if((fp_faidx = fopen(faidxfile, "r")))
     {
 	faidx idx=read_fa_idx(fp_faidx, chr);
+
+	if (idx.total_len == 0)
+	{
+	    fprintf(stderr, "Error: invalid CHR name - %s\n", chr);
+	    return 1;
+	}
 
 	if((fp_fa = fopen(fafile, "r")))
 	{
