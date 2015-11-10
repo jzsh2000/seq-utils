@@ -21,7 +21,7 @@
 
 #define MAXLEN 255
 #define MAX_LINE_LEN 1024
-#define DEBUG
+/* #define DEBUG */
 
 typedef struct faidx{
     unsigned total_len;
@@ -110,11 +110,11 @@ int read_seq(FILE *fp, faidx idx, unsigned pos1, unsigned pos2)
     {
 	fgets(tmp_line, MAX_LINE_LEN, fp);
 
-	/* the last character is '\n', so decreased by 1 */
-	if(get_line_length(tmp_line) < max_inc)
-	{
-	    max_inc = get_line_length(tmp_line);
-	}
+	max_inc = get_line_length(tmp_line) < max_inc ? get_line_length(tmp_line) : idx.valid_char_per_line;
+
+#ifdef DEBUG
+    printf("\nmax_inc=%u\n", max_inc);
+#endif
 
 	if(output_len + max_inc >= pos2 - pos1 + 1)
 	{

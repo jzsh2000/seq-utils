@@ -12,6 +12,7 @@ realbin=$realdir/getSubSeq
 ## some default genome fasta file paths
 hg19_fa='/Volumes/STDT4000300/Database/iGenome/Homo_sapiens/UCSC/hg19/Sequence/WholeGenomeFasta/genome.fa'
 hg38_fa='/Volumes/STDT4000300/Database/iGenome/Homo_sapiens/UCSC/hg38/Sequence/WholeGenomeFasta/genome.fa'
+mm10_fa='/Volumes/STDT4000300/Database/iGenome/Mus_musculus/UCSC/mm10/Sequence/WholeGenomeFasta/genome.fa'
 
 # ======================= end user config =========================== #
 
@@ -33,6 +34,8 @@ if [ -z $fa_file ] || [ "$fa_file" == "hg19" ]; then
     fa_file=$hg19_fa
 elif [ "$fa_file" == "hg38" ]; then
     fa_file=$hg38_fa
+elif [ "$fa_file" == "mm10" ]; then
+    fa_file=$mm10_fa
 fi
 
 if [ ! -f $fa_file ] || [ ! -r $fa_file ]; then
