@@ -24,10 +24,10 @@
 #define DEBUG
 
 typedef struct faidx{
-    unsigned int total_len;
-    unsigned int start_pos;
-    unsigned int valid_char_per_line;
-    unsigned int char_per_line;
+    unsigned total_len;
+    unsigned start_pos;
+    unsigned valid_char_per_line;
+    unsigned char_per_line;
 }faidx;
 
 void usage(const char* arg)
@@ -96,6 +96,11 @@ int read_seq(FILE *fp, faidx idx, unsigned pos1, unsigned pos2)
     }
 
     unsigned offset = idx.start_pos + pos1 / idx.valid_char_per_line * idx.char_per_line + pos1 % idx.valid_char_per_line - 1;
+    if(pos1 % idx.valid_char_per_line == 0)
+    {
+	offset -= 1;
+    }
+
 #ifdef DEBUG
     printf("offset=%u\n", offset);
 #endif
@@ -138,7 +143,7 @@ int main(int argc, char * argv[])
     char chr[MAXLEN];
     char tmp_p0[MAXLEN];
     char *tmp_p1, *tmp_p2;
-    unsigned int pos1, pos2;
+    unsigned pos1, pos2;
 
 
     if(argc==1)
