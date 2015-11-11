@@ -10,23 +10,50 @@ realbin=$realdir/getSubSeq
 # ======================= user config =========================== #
 
 ## some default genome fasta file paths
-hg19_fa='/Volumes/STDT4000300/Database/iGenome/Homo_sapiens/UCSC/hg19/Sequence/WholeGenomeFasta/genome.fa'
-hg38_fa='/Volumes/STDT4000300/Database/iGenome/Homo_sapiens/UCSC/hg38/Sequence/WholeGenomeFasta/genome.fa'
-mm10_fa='/Volumes/STDT4000300/Database/iGenome/Mus_musculus/UCSC/mm10/Sequence/WholeGenomeFasta/genome.fa'
+hg19_fa='/Users/jinxy/Database/hg19/genome.fa'
+hg38_fa='/Users/jinxy/Database/hg38/genome.fa'
 
 # ======================= end user config =========================== #
 
 function usage() {
-    echo "Usage: $0 chr pos1 pos2 [fa_id | fa_file]"
+    echo "Usage: $0 [-r] chr pos1 pos2 [fa_id | fa_file]"
 }
+
+function check_num() {
+    if ! echo "$1" | egrep -xq '[0-9]+'; then
+	echo "Error: not a number - '$1'" >&2
+	exit 1
+    fi
+}
+
+if [ "$1" == "-r" ]; then
+    rev=1
+    shift
+else
+    rev=0
+fi
+
+if [ $# -lt 3 ]; then
+    usage >&2
+    exit 1
+fi
 
 chr=$1
 pos1=$2
 pos2=$3
 fa_file=$4
 
-if [ $# -lt 3 ]; then
-    usage
+check_num $pos1
+check_num $pos2
+
+# pos1 shouldn't be greater than pos2, but if pos1 is really greater than pos2,
+# then the output would be reverse complementary sequences. The effect is same
+# as add `-r` parament. Note that if `-r` parament is added while pos1 is
+# greater than pos2, these two decorations would be neutralized.
+if [ $pos1 -gt $pos2 ]; then
+    rev=$[1-$rev]
+    pos1=$3
+    pos2=$2
 fi
 
 if [ -z $fa_file ] || [ "$fa_file" == "hg19" ]; then
@@ -34,12 +61,14 @@ if [ -z $fa_file ] || [ "$fa_file" == "hg19" ]; then
     fa_file=$hg19_fa
 elif [ "$fa_file" == "hg38" ]; then
     fa_file=$hg38_fa
-elif [ "$fa_file" == "mm10" ]; then
-    fa_file=$mm10_fa
 fi
 
 if [ ! -f $fa_file ] || [ ! -r $fa_file ]; then
     echo "Error: cannot read file '$fa_file'" >&2
 fi
 
-$realbin -q ${chr}:${pos1}-${pos2} -f $fa_file | fold
+if [ $rev -eq 0 ]; then
+    $realbin -q ${chr}:${pos1}-${pos2} -f $fa_file | tr 'a-z' 'A-Z' | fold -w 50
+else
+    $realbin -q ${chr}:${pos1}-${pos2} -f $fa_file | rev | tr 'a-z' 'A-Z' | tr 'AGCT' 'TCGA' | fold -w 50
+fi
