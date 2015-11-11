@@ -56,8 +56,10 @@ if [ $pos1 -gt $pos2 ]; then
     pos2=$2
 fi
 
-if [ -z $fa_file ] || [ "$fa_file" == "hg19" ]; then
-    # use hg19 if `fa_file` not set
+if [ -z $fa_file ]; then
+    # use hg38 if `fa_file` not set
+    fa_file=$hg38_fa
+elif [ "$fa_file" == "hg19" ]; then
     fa_file=$hg19_fa
 elif [ "$fa_file" == "hg38" ]; then
     fa_file=$hg38_fa
