@@ -51,9 +51,8 @@ my $pat_len =  &get_pattern_len($pattern);
 
 open(FA, "<$fa_file") or die "Couldn't open $fa_file for reading: $!";
 
-my $chr;
-my @chr;
-my %chr_count;
+my $chr='';
+my $chr_count=0;
 my $tail_str='';
 
 while(<FA>) {
@@ -61,18 +60,14 @@ while(<FA>) {
     /^\s*$/ and next;
 
     if(/^>(\w+)/) {
+	print "$chr\t$chr_count\n" if $chr ne '';
 	$chr=$1;
-	push @chr, $chr;
-	if (not defined $chr_count{$chr}) {
-	    $chr_count{$chr} = 0;
-	}
+	$chr_count = 0;
     } else {
 	my @word=(($tail_str.$_)=~m/$pattern/ig);
 	my $tail_str=substr($_, 1-$pat_len);
-	$chr_count{$chr} += scalar(@word);
+	$chr_count += scalar(@word);
     }
 }
 
-foreach my $key (@chr) {
-    print "$key\t$chr_count{$key}\n";
-}
+print "$chr\t$chr_count\n" if $chr ne '';
