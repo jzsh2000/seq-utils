@@ -5,7 +5,7 @@
 # The encapsulation of `getSubSeq` program
 
 realdir=$(dirname $(realpath $0))
-realbin=$realdir/getSubSeq
+realbin=$realdir/getSubSeq/getSubSeq
 
 # ======================= user config =========================== #
 
