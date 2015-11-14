@@ -10,13 +10,20 @@ use warnings;
 use strict;
 
 my $fa_file="/Users/jinxy/Database/hg38/genome.fa";
+my $reverse=0;
 
 $/='>';
 
 sub usage()
 {
-    print "Usage: $0 <pattern> [fasta_file]\n";
+    print "Usage: $0 [-r] <pattern> [fasta_file]\n";
     print "\te.g. $0 'ggaa..gaaa' genome.fa\n";
+    print "\te.g. $0 -r 'ggaa..gaaa' genome.rev.fa\n";
+}
+
+if (defined $ARGV[0] and $ARGV[0] eq '-r') {
+    $reverse=1;
+    shift;
 }
 
 &usage and exit if not defined $ARGV[0];
@@ -34,7 +41,16 @@ while(<FA>) {
 	$seq =~ s/>\z//;
 
 	while ($seq =~ m/$pattern/ig) {
-	    print $chr."\t".(pos($seq)-length($&)+1)."\t".pos($seq)."\t".$&."\n";
+	    my $match_beg = pos($seq) - length($&) + 1;
+	    my $match_len = $&;
+	    my $match_end = pos($seq);
+
+	    if ($reverse) {
+		$match_beg -= (length($seq) + 1);
+		$match_end -= (length($seq) + 1);
+	    }
+
+	    print "$chr\t$match_beg\t$match_end\t$match_len\n";
 	}
     }
 }
