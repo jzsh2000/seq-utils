@@ -3,6 +3,8 @@
 # Date  : 2015-10-09
 # Reference: http://seqanswers.com/forums/showthread.php?t=4914
 
+## use gff file as input, calculate the length of each _transcript_
+
 import sys
 import HTSeq
 
@@ -12,7 +14,7 @@ transcripts= {}
 
 for feature in gff_file:
    if feature.type == "exon":
-      transcript_id = feature.attr['gene_name']
+      transcript_id = feature.attr['Parent']
       if transcript_id == '':
          continue
       if transcript_id not in transcripts:
