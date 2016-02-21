@@ -21,9 +21,8 @@ stopifnot(file.exists(bam.file))
 exons.by.gene <- exonsBy(TxDb.Hsapiens.UCSC.hg38.knownGene, by="gene")
 
 se <- summarizeOverlaps(exons.by.gene, BamFile(bam.file),
-			mode="Union",
 			singleEnd=FALSE,
 			ignore.strand=TRUE,
 			fragments=TRUE)
 
-write.csv(assay(se), col.names=FALSE, quote=FALSE, sep='\t')
+write.table(assay(se), col.names=FALSE, sep='\t')

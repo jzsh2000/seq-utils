@@ -28,9 +28,8 @@ if(file.exists(tmpfile)) {
 }
 
 se <- summarizeOverlaps(exons.by.gene, BamFile(bam.file),
-			mode="Union",
 			singleEnd=FALSE,
 			ignore.strand=TRUE,
 			fragments=TRUE)
 
-write.table(assay(se), col.names=FALSE, quote=FALSE, sep='\t')
+write.table(assay(se), col.names=FALSE, sep='\t')
