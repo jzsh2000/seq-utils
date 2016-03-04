@@ -1,0 +1,3 @@
+hisat_index:/pfs1/zhanglg/zlg01/Database/hg38/hg38_hisat/hg38_hisat
+count_script:/home/zlg01/tools/RNA-seq/raw-count/calculate_count.ucsc.R
+count_script_se:/home/zlg01/tools/RNA-seq/raw-count/calculate_count.ucsc.se.R
