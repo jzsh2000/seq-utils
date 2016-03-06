@@ -22,7 +22,11 @@ library(org.Hs.eg.db)
 txdb <- keepStandardChromosomes(TxDb.Hsapiens.UCSC.hg38.knownGene)
 exons.list.per.gene <- exonsBy(txdb,by="gene")
 
-gene.symbol = mapIds(org.Hs.eg.db, keys=names(exons.list.per.gene), keytype="ENTREZID", column="SYMBOL")
+gene.symbol = mapIds(org.Hs.eg.db,
+    keys=names(exons.list.per.gene),
+    keytype="ENTREZID",
+    column="SYMBOL")
+
 # gene.exons_num = elementLengths(exons.list.per.gene)
 gene.length = sapply(exons.list.per.gene, function(x){sum(width(reduce(x)))})
 
