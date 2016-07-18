@@ -15,19 +15,19 @@ library(GenomicFeatures)
 
 gtf.file  <- args[1]
 bam.file <- args[2]
-tmpfile <- '/tmp/.gtf.rda'
+tmpfile <- '/tmp/.gtf.rds'
 
 stopifnot(file.exists(bam.file), file.exists(gtf.file))
 
 if(file.exists(tmpfile)) {
-    load(tmpfile)
+    exons.by.gene <- readRDS(tmpfile)
 } else {
-    txdb <- makeTxDbFromGFF(gtf.file)
+    txdb <- keepStandardChromosomes(makeTxDbFromGFF(gtf.file))
     exons.by.gene <- exonsBy(txdb, by="gene")
-    save(txdb, exons.by.gene, file = tmpfile)
+    saveRDS(exons.by.gene, file = tmpfile)
 }
 
-bam <- as(readGAlignmentPairs(BamFile(bam.file)), 'GRangesList')
+bam <- as(readGAlignments(BamFile(bam.file)), 'GRangesList')
 res = countOverlaps(exons.by.gene, bam, ignore.strand = TRUE)
 write.table(data.frame(names(res), unname(res)),
            row.names=FALSE,
