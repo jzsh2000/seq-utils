@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 #
 # Copyright 2015, Daehwan Kim <infphilo@gmail.com>
@@ -18,8 +18,7 @@
 # You should have received a copy of the GNU General Public License
 # along with HISAT 2.  If not, see <http://www.gnu.org/licenses/>.
 #
-
-from __future__ import print_function
+# 2016-11-09 modified by Xiaoyang Jin
 
 from sys import stderr, exit
 from collections import defaultdict as dd, Counter
@@ -64,26 +63,17 @@ def extract_splice_sites(gtf_file, verbose=False):
         else:
             trans[transcript_id][2].append([left, right])
 
-    # Sort exons and merge where separating introns are <=5 bps
-    for tran, [chrom, strand, exons] in trans.items():
-            exons.sort()
-            tmp_exons = [exons[0]]
-            for i in range(1, len(exons)):
-                if exons[i][0] - tmp_exons[-1][1] <= 5:
-                    tmp_exons[-1][1] = exons[i][1]
-                else:
-                    tmp_exons.append(exons[i])
-            trans[tran] = [chrom, strand, tmp_exons]
-
-    # Calculate and print the unique junctions
+    # Sort exons and print the unique junctions
     junctions = set()
-    for chrom, strand, exons in trans.values():
+    for tran, [chrom, strand, exons] in trans.items():
+        exons.sort()
         for i in range(1, len(exons)):
-            junctions.add((chrom, exons[i-1][1], exons[i][0], strand))
+            junctions.add((chrom, exons[i-1][1], exons[i][0], strand, tran))
+
     junctions = sorted(junctions)
-    for chrom, left, right, strand in junctions:
-        # Zero-based offset
-        print('{}\t{}\t{}\t{}'.format(chrom, left-1, right-1, strand))
+    for chrom, left, right, strand, tran in junctions:
+        # One-based offset
+        print('{}\t{}\t{}\t{}\t{}'.format(chrom, left, right, strand, tran))
         
     # Print some stats if asked
     if verbose:
