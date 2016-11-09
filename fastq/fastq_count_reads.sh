@@ -4,7 +4,7 @@
 # Date  : 2015-10-12
 # counts the number of reads in a fastq file
 
-if [ $# -eq 0 ] ; then
+if [ $# -eq 0 ] || [ "$1" == "-h" ] ; then
     echo "usage: $0 [fastq_file]..."
     echo "counts the number of reads in a fastq file"
     exit 0
