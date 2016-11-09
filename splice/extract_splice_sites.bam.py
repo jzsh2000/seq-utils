@@ -4,7 +4,7 @@ import pysam
 import sys
 from argparse import ArgumentParser, FileType
 
-def find_introns(read_iterator):
+def find_introns(read_iterator, mapq_threshold):
     """Return a dictionary {(chr, start, stop): count}
     Listing the intronic sites in the reads (identified by 'N' in the cigar strings),
     and their support ( = number of reads ).
@@ -17,7 +17,7 @@ def find_introns(read_iterator):
     import collections
     res = collections.Counter()
     for r in read_iterator:
-        if 'N' in r.cigarstring:
+        if 'N' in r.cigarstring and r.mapping_quality>=mapq_threshold:
             last_read_pos = False
             for read_loc, genome_loc in r.get_aligned_pairs():
                 refer = r.reference_name
@@ -39,13 +39,18 @@ if __name__ == '__main__':
         nargs='?',
         type=FileType('r'),
         help='input BAM file')
+    parser.add_argument('-q', '--mapq',
+        nargs=1,
+        dest='mapq',
+        default=30,
+        help='only include reads with mapping quality >= INT [30]')
 
     args = parser.parse_args()
     if not args.bam_file:
         parser.print_help()
         exit(1)
 
-    samfile = pysam.AlignmentFile(sys.argv[1], 'rb')
-    res = find_introns(samfile)
+    samfile = pysam.AlignmentFile(args.bam_file, 'rb')
+    res = find_introns(samfile, int(args.mapq[0]))
     for key,value in res.items():
         print("{}\t{}\t{}\t{}\t{}".format(*key, value))
