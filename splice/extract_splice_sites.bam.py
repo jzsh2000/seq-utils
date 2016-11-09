@@ -17,19 +17,13 @@ def find_introns(read_iterator, mapq_threshold):
     import collections
     res = collections.Counter()
     for r in read_iterator:
-        if 'N' in r.cigarstring and r.mapping_quality>=mapq_threshold:
-            last_read_pos = False
-            for read_loc, genome_loc in r.get_aligned_pairs():
-                refer = r.reference_name
-                strand = '-' if r.is_reverse else '+'
-                if read_loc is None and last_read_pos:
-                    start = genome_loc
-                elif read_loc and last_read_pos is None:
-                    stop = genome_loc  # we are right exclusive ,so this is correct
-                    res[(refer, start, stop, strand)] += 1
-                    del start
-                    del stop
-                last_read_pos = read_loc
+        if r.mapping_quality >= mapq_threshold and 'N' in r.cigarstring:
+            refer = r.reference_name
+            strand = '-' if r.is_reverse else '+'
+            exons = r.get_blocks()
+            exons.sort()
+            for i in range(1, len(exons)):
+                res[(refer, exons[i-1][1], exons[i][0]+1, strand)] += 1
     return res
 
 if __name__ == '__main__':
