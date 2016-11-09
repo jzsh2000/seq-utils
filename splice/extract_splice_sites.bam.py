@@ -40,9 +40,9 @@ if __name__ == '__main__':
         type=FileType('r'),
         help='input BAM file')
     parser.add_argument('-q', '--mapq',
-        nargs=1,
         dest='mapq',
         default=30,
+        type=int,
         help='only include reads with mapping quality >= INT [30]')
 
     args = parser.parse_args()
@@ -51,6 +51,6 @@ if __name__ == '__main__':
         exit(1)
 
     samfile = pysam.AlignmentFile(args.bam_file, 'rb')
-    res = find_introns(samfile, int(args.mapq[0]))
+    res = find_introns(samfile, args.mapq)
     for key,value in res.items():
-        print("{}\t{}\t{}\t{}\t{}".format(*key, value))
+        print("{1}\t{2}\t{3}\t{4}\t{0}".format(value, *key))
