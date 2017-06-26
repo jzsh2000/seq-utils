@@ -8,6 +8,7 @@ set -ue
 
 file="$1"
 file_info=$(file "$file")
+file_size=$(ls -lh "$file" | awk '{print $5}')
 
 # === guess the input file type
 file_type='text'
@@ -69,6 +70,9 @@ fi
 # === get dimensions
 acolor='\033[0;36m'
 ncolor='\033[0m'
+file_size_color=${acolor}${file_size}${ncolor}
+n_row_color=${acolor}${n_row}${ncolor}
+n_col_color=${acolor}${n_col}${ncolor}
 echo -e "$(basename $file): \
-    [ ${acolor}${n_row}${ncolor} rows | ${acolor}${n_col}${ncolor} columns ]"
+    [ $file_size_color | $n_row_color rows | $n_col_color columns ]"
 echo "$snippet"
