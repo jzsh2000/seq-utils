@@ -74,5 +74,5 @@ file_size_color=${acolor}${file_size}${ncolor}
 n_row_color=${acolor}${n_row}${ncolor}
 n_col_color=${acolor}${n_col}${ncolor}
 echo -e "$(basename $file): \
-    [ $file_size_color | $n_row_color rows | $n_col_color columns ]"
+    [ $file_size_color bytes | $n_row_color rows | $n_col_color columns ]"
 echo "$snippet"
